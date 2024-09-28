@@ -39,7 +39,9 @@ const jobUpdateHeroes = cron.schedule(`0 0 * * *`, async () => {
           ROLE.toLocaleLowerCase() as metaHeroesType
         );
         console.log(`Fetched data for ${ROLES[index]}:`, heroesMeta);
-        await redisClient.set(ROLES[index], JSON.stringify(heroesMeta));
+        await redisClient.set(ROLES[index], JSON.stringify(heroesMeta), {
+          EX: 60 * 60 * 24,
+        });
         console.log(`Saved data for ${ROLES[index]} to cache in Redis`);
       } catch (error) {
         console.error(`Error fetching heroes meta for ${ROLES[index]}:`, error);
