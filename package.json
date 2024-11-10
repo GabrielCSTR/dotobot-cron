@@ -17,7 +17,7 @@
   "author": "GBRL DEV (https://twitch.tv/xstrdoto)",
   "license": "ISC",
   "dependencies": {
-    "d2pt.js": "^1.0.8",
+    "d2pt.js": "^1.0.9",
     "dotenv": "^16.4.5",
     "node-cron": "^3.0.3",
     "redis": "^4.7.0",
