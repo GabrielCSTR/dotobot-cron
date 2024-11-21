@@ -7,7 +7,7 @@ import * as dotenv from "dotenv";
 dotenv.config();
 
 // Constants
-const ROLES = ["HC", "MID", "TOP", "SUP4", "SUP5"];
+const ROLES = ["HC", "MID", "OFF", "SUP4", "SUP5"];
 const CACHE_EXPIRATION = 60 * 60 * 12; // 12 hours in seconds
 const FETCH_DELAY = 60 * 1000; // 1 minute in milliseconds
 const MAX_ATTEMPTS = 3;
