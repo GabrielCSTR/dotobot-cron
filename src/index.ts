@@ -1,65 +1,117 @@
+import { createClient } from "redis";
+import { D2PtScraper } from "d2pt.js";
 import { metaHeroesType } from "./consts";
 import cron from "node-cron";
 import * as dotenv from "dotenv";
-import { D2PtScraper } from "d2pt.js";
-import { createClient } from "redis";
 
 dotenv.config();
 
+// Constants
 const ROLES = ["HC", "MID", "TOP", "SUP4", "SUP5"];
-const d2pt = new D2PtScraper();
+const CACHE_EXPIRATION = 60 * 60 * 12; // 12 hours in seconds
+const FETCH_DELAY = 60 * 1000; // 1 minute in milliseconds
+const MAX_ATTEMPTS = 3;
 
-const redisUrl = process.env.REDIS_HOST;
-const redisClient = createClient({
-  url: redisUrl,
-});
-console.log("Start Connection to Redis...");
-
-redisClient.on("error", (err) => console.log("Redis Client Error", err));
+// Redis client setup
+const redisClient = createClient({ url: process.env.REDIS_HOST });
+redisClient.on("error", (err) => console.error("Redis Client Error:", err));
 redisClient.on("connect", () => console.log("Redis Client Connected"));
 
-async function getHeroesMetaWithDelay() {
-  console.log("Fetching heroes meta with delay...");
-  for (let index = 0; index < ROLES.length; index++) {
-    try {
-      const ROLE = ROLES[index] as metaHeroesType;
-      const getHeroesMetaCache = await redisClient.get(ROLE);
-      console.log(`Checking cache for ${ROLES[index]}...`);
+// D2PT scraper instance
+const d2pt = new D2PtScraper();
 
-      if (getHeroesMetaCache && getHeroesMetaCache.length > 0) {
-        console.log(`Data for ${ROLES[index]} already exists in cache`);
-        continue;
-      }
+/**
+ * Fetches and caches heroes meta data for a specific role.
+ * @param role The role to fetch meta data for.
+ */
+async function fetchAndCacheHeroMeta(role: string): Promise<void> {
+  try {
+    console.log(`Checking cache for role: ${role}...`);
+    const cachedData = await redisClient.get(role);
 
-      const heroesMeta = await d2pt.getHeroesMeta(
-        ROLE.toLocaleLowerCase() as metaHeroesType,
-        5
-      );
-      console.log(`Fetched data for ${ROLES[index]}:`, heroesMeta);
-      await redisClient.set(
-        ROLES[index].toLocaleLowerCase(),
-        JSON.stringify(heroesMeta),
-        {
-          EX: 60 * 60 * 12,
-        }
-      );
-      console.log(`Saved data for ${ROLES[index]} to cache in Redis`);
-    } catch (error) {
-      console.error(`Error fetching heroes meta for ${ROLES[index]}:`, error);
+    if (cachedData) {
+      console.log(`Cache hit for role: ${role}. Skipping fetch.`);
+      return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 60 * 1000));
+    console.log(`No cache found for role: ${role}. Fetching data...`);
+    let attempts = 0;
+    let heroesMeta: any[] | null = null;
+
+    while (
+      (!heroesMeta || heroesMeta.length === 0) &&
+      attempts < MAX_ATTEMPTS
+    ) {
+      attempts++;
+      try {
+        heroesMeta = await d2pt.getHeroesMeta(
+          role.toLowerCase() as metaHeroesType,
+          5
+        );
+        if (!heroesMeta || heroesMeta.length === 0) {
+          console.warn(
+            `Attempt ${attempts} failed for role: ${role}. Retrying...`
+          );
+        }
+      } catch (err) {
+        console.error(
+          `Error fetching data for role: ${role}, attempt ${attempts}`,
+          err
+        );
+      }
+    }
+
+    if (heroesMeta && heroesMeta.length > 0) {
+      console.log(`Fetched data for role: ${role}. Caching to Redis...`);
+      await redisClient.set(role.toLowerCase(), JSON.stringify(heroesMeta), {
+        EX: CACHE_EXPIRATION,
+      });
+      console.log(`Data for role: ${role} successfully cached.`);
+    } else {
+      console.warn(
+        `Failed to fetch data for role: ${role} after ${MAX_ATTEMPTS} attempts.`
+      );
+    }
+  } catch (err) {
+    console.error(`Unexpected error while processing role: ${role}`, err);
   }
 }
 
-(async () => {
-  await redisClient.connect();
+/**
+ * Fetches heroes meta data for all roles with a delay between each fetch.
+ */
+async function fetchAllHeroesMetaWithDelay(): Promise<void> {
+  console.log("Starting fetch for all roles...");
+  for (const role of ROLES) {
+    await fetchAndCacheHeroMeta(role);
+    console.log(`Delaying next fetch for ${FETCH_DELAY / 1000} seconds...`);
+    await new Promise((resolve) => setTimeout(resolve, FETCH_DELAY));
+  }
+  console.log("Finished fetching all roles.");
+}
 
-  await getHeroesMetaWithDelay();
+/**
+ * Initializes the application, connects to Redis, and sets up the cron job.
+ */
+async function init(): Promise<void> {
+  try {
+    console.log("Connecting to Redis...");
+    await redisClient.connect();
 
-  // Schedule to run every 12 hours
-  const jobUpdateHeroes = cron.schedule(`0 */12 * * *`, async () => {
-    console.log("Running cron job update meta heroes...");
-    await getHeroesMetaWithDelay();
-  });
-})();
+    console.log("Fetching initial heroes meta data...");
+    await fetchAllHeroesMetaWithDelay();
+
+    console.log(
+      "Setting up cron job to update heroes meta data every 12 hours..."
+    );
+    cron.schedule("0 */12 * * *", async () => {
+      console.log("Running scheduled task: Updating heroes meta data...");
+      await fetchAllHeroesMetaWithDelay();
+    });
+  } catch (err) {
+    console.error("Error during initialization:", err);
+  }
+}
+
+// Start the application
+init();
